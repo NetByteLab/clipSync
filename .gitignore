@@ -1,0 +1,23 @@
+# Android
+clipSync-android/.gradle/
+clipSync-android/build/
+clipSync-android/app/build/
+clipSync-android/local.properties
+clipSync-android/*.hprof
+
+# Go (Server)
+clipSync-server/bin/
+clipSync-server/data/*.db
+clipSync-server/data/*.db-shm
+clipSync-server/data/*.db-wal
+clipSync-server/server.exe
+clipSync-server/clipsync-server.exe
+
+# IDEs
+.idea/
+*.iml
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
