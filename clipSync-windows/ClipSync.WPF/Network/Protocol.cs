@@ -158,6 +158,15 @@ namespace ClipSync.WPF.Network
             return Serialize(WebSocketMessage.Create("device_list", new JObject()));
         }
 
+        public static string CreateDeviceUnregisterMessage(string deviceId)
+        {
+            var payload = new JObject
+            {
+                ["device_id"] = deviceId
+            };
+            return Serialize(WebSocketMessage.Create("device_unregister", payload));
+        }
+
         public static string CreatePongMessage()
         {
             return Serialize(WebSocketMessage.Create("pong", new JObject()));

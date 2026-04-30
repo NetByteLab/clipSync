@@ -63,6 +63,7 @@ namespace ClipSync.WPF
             _syncEngine.ErrorOccurred += OnErrorOccurred;
             _syncEngine.DeviceListUpdated += OnDeviceListUpdated;
             _syncEngine.ClipboardItemReceived += OnClipboardItemReceived;
+            _syncEngine.ClipboardHistoryUpdated += OnClipboardHistoryUpdated;
 
             ShowLoginContent();
         }
@@ -488,6 +489,12 @@ namespace ClipSync.WPF
         {
             _lastClipboardSyncAt = DateTime.Now;
             AppLogger.Info("MainWindow", $"收到剪贴板项，准备刷新历史列表: type={item.ContentType}, source={item.SourceDeviceName}");
+            await LoadHistoryAsync();
+        }
+
+        private async void OnClipboardHistoryUpdated()
+        {
+            AppLogger.Info("MainWindow", "远端剪贴板历史已导入，准备刷新历史列表");
             await LoadHistoryAsync();
         }
 

@@ -75,6 +75,18 @@ namespace ClipSync.WPF.Tests
         }
 
         [Fact]
+        public void CreateDeviceUnregisterMessage_IncludesDeviceId()
+        {
+            // Act
+            string message = Protocol.CreateDeviceUnregisterMessage("dev-123");
+
+            // Assert
+            var obj = JObject.Parse(message);
+            Assert.Equal("device_unregister", obj["type"]?.Value<string>());
+            Assert.Equal("dev-123", obj["payload"]?["device_id"]?.Value<string>());
+        }
+
+        [Fact]
         public void Deserialize_ValidMessage()
         {
             // Arrange

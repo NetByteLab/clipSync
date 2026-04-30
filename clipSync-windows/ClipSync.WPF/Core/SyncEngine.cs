@@ -20,6 +20,7 @@ namespace ClipSync.WPF.Core
 
         public event Action<string>? ConnectionStateChanged;
         public event Action<Network.ClipboardItem>? ClipboardItemReceived;
+        public event Action? ClipboardHistoryUpdated;
         public event Action<string>? ErrorOccurred;
         public event Action<List<Network.Device>>? DeviceListUpdated;
 
@@ -156,7 +157,7 @@ namespace ClipSync.WPF.Core
                         _heartbeatTimer?.OnHeartbeatAck();
                         break;
                     case "clipboard_history":
-                        HandleClipboardHistory(wsMessage);
+                        await HandleClipboardHistoryAsync(wsMessage);
                         break;
                     case "device_list_response":
                         HandleDeviceListResponse(wsMessage);
@@ -278,13 +279,54 @@ namespace ClipSync.WPF.Core
 
             if (_database != null)
             {
-                await _database.InsertClipboardItemAsync(item);
+                _ = await _database.InsertClipboardItemAsync(item);
             }
         }
 
-        private void HandleClipboardHistory(WebSocketMessage message)
+        private async Task HandleClipboardHistoryAsync(WebSocketMessage message)
         {
-            // Handle clipboard history response if needed
+            var itemsArray = message.Payload?.Property("items")?.Value;
+            if (itemsArray == null)
+            {
+                AppLogger.Warn("SyncEngine", "收到 clipboard_history，但缺少 items 字段");
+                return;
+            }
+
+            var importedCount = 0;
+            foreach (var itemToken in itemsArray)
+            {
+                var item = new Network.ClipboardItem
+                {
+                    Id = GetLong(itemToken, "id"),
+                    ContentType = GetString(itemToken, "content_type", "text"),
+                    Content = GetString(itemToken, "content"),
+                    Format = GetString(itemToken, "format"),
+                    Size = GetLong(itemToken, "size"),
+                    Checksum = GetString(itemToken, "checksum"),
+                    SourceDeviceId = GetString(itemToken, "source_device_id"),
+                    SourceDeviceName = GetString(itemToken, "source_device_name", "Unknown device"),
+                    CreatedAt = GetLong(itemToken, "created_at")
+                };
+
+                if (string.IsNullOrEmpty(item.Content) || string.IsNullOrEmpty(item.Checksum))
+                {
+                    continue;
+                }
+
+                if (_database != null && await _database.InsertClipboardItemAsync(item))
+                {
+                    importedCount++;
+                }
+            }
+
+            var total = GetLong(message.Payload, "total");
+            var hasMore = GetBool(message.Payload, "has_more");
+            AppLogger.Info("SyncEngine", $"收到剪贴板历史: imported={importedCount}, total={total}, has_more={hasMore}");
+
+            if (importedCount > 0)
+            {
+                ClipboardHistoryUpdated?.Invoke();
+            }
         }
 
         private void HandleDeviceListResponse(WebSocketMessage message)
@@ -479,7 +521,7 @@ namespace ClipSync.WPF.Core
                 CreatedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
             };
 
-            await _database.InsertClipboardItemAsync(item);
+            _ = await _database.InsertClipboardItemAsync(item);
         }
 
         private async Task PublishClipboardChangedEventAsync(ClipboardChangedEventArgs args)

@@ -57,11 +57,11 @@ namespace ClipSync.WPF.Storage
             });
         }
 
-        public async Task InsertClipboardItemAsync(Network.ClipboardItem item)
+        public async Task<bool> InsertClipboardItemAsync(Network.ClipboardItem item)
         {
             await EnsureInitializedAsync();
 
-            await Task.Run(() =>
+            return await Task.Run(() =>
             {
                 using var connection = new SqliteConnection($"Data Source={_dbPath}");
                 connection.Open();
@@ -70,8 +70,15 @@ namespace ClipSync.WPF.Storage
                 command.CommandText = @"
                     INSERT INTO clipboard_history
                     (content_type, content, format, size, checksum, source_device_id, source_device_name, created_at)
-                    VALUES
-                    (@contentType, @content, @format, @size, @checksum, @sourceDeviceId, @sourceDeviceName, @createdAt)";
+                    SELECT
+                    @contentType, @content, @format, @size, @checksum, @sourceDeviceId, @sourceDeviceName, @createdAt
+                    WHERE NOT EXISTS (
+                        SELECT 1
+                        FROM clipboard_history
+                        WHERE checksum = @checksum
+                          AND source_device_id = @sourceDeviceId
+                          AND created_at = @createdAt
+                    )";
                 command.Parameters.AddWithValue("@contentType", item.ContentType);
                 command.Parameters.AddWithValue("@content", item.Content);
                 command.Parameters.AddWithValue("@format", item.Format);
@@ -80,7 +87,12 @@ namespace ClipSync.WPF.Storage
                 command.Parameters.AddWithValue("@sourceDeviceId", item.SourceDeviceId);
                 command.Parameters.AddWithValue("@sourceDeviceName", item.SourceDeviceName);
                 command.Parameters.AddWithValue("@createdAt", item.CreatedAt);
-                command.ExecuteNonQuery();
+                var inserted = command.ExecuteNonQuery() > 0;
+
+                if (!inserted)
+                {
+                    return false;
+                }
 
                 // Keep only last 50 items
                 var deleteCommand = connection.CreateCommand();
@@ -92,6 +104,8 @@ namespace ClipSync.WPF.Storage
                         LIMIT 50
                     )";
                 deleteCommand.ExecuteNonQuery();
+
+                return true;
             });
         }
 
