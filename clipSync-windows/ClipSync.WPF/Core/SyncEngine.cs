@@ -468,6 +468,31 @@ namespace ClipSync.WPF.Core
             await _webSocketClient.SendAsync(message);
         }
 
+        public async Task<bool> UnregisterDeviceAsync(string deviceId)
+        {
+            if (_httpClient == null)
+            {
+                ErrorOccurred?.Invoke("Device service is not ready");
+                return false;
+            }
+
+            if (string.IsNullOrWhiteSpace(deviceId))
+            {
+                ErrorOccurred?.Invoke("Device ID is required");
+                return false;
+            }
+
+            var result = await _httpClient.DeleteDeviceAsync(deviceId);
+            if (!result.Success)
+            {
+                ErrorOccurred?.Invoke(result.Error ?? "Failed to unregister device");
+                return false;
+            }
+
+            AppLogger.Info("SyncEngine", $"设备注销成功: device_id={deviceId}");
+            return true;
+        }
+
         public async Task<List<Network.ClipboardItem>> GetLocalHistoryAsync(int limit = 50)
         {
             if (_database == null) return new List<Network.ClipboardItem>();

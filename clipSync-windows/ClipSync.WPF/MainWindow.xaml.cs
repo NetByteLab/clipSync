@@ -827,8 +827,62 @@ namespace ClipSync.WPF
             Grid.SetColumn(statusBadge, 1);
             layout.Children.Add(statusBadge);
 
+            var isCurrentDevice = string.Equals(
+                device.DeviceId,
+                _settingsManager.Settings.DeviceId,
+                StringComparison.OrdinalIgnoreCase);
+
+            var removeButton = new Button
+            {
+                Content = isCurrentDevice ? "Current Device" : "Remove",
+                Margin = new Thickness(0, 44, 0, 0),
+                Padding = new Thickness(12, 6, 12, 6),
+                MinWidth = 110,
+                HorizontalAlignment = HorizontalAlignment.Right,
+                VerticalAlignment = VerticalAlignment.Top,
+                Style = FindResource("SecondaryButtonStyle") as Style,
+                IsEnabled = !isCurrentDevice
+            };
+            removeButton.Click += async (s, e) => await OnUnregisterDeviceAsync(device);
+            Grid.SetColumn(removeButton, 1);
+            layout.Children.Add(removeButton);
+
             card.Child = layout;
             return card;
+        }
+
+        private async Task OnUnregisterDeviceAsync(Network.Device device)
+        {
+            if (string.IsNullOrWhiteSpace(device.DeviceId))
+            {
+                MessageBox.Show("设备 ID 不可用，无法移除该设备。", "无法移除设备", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            if (string.Equals(device.DeviceId, _settingsManager.Settings.DeviceId, StringComparison.OrdinalIgnoreCase))
+            {
+                MessageBox.Show("当前这台设备不能在这里移除，请先在其他设备上操作。", "当前设备", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            var result = MessageBox.Show(
+                $"确定要移除设备“{GetDeviceDisplayName(device)}”吗？该设备将需要重新登录后才能继续同步。",
+                "移除设备",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Warning);
+
+            if (result != MessageBoxResult.Yes)
+            {
+                return;
+            }
+
+            var success = await _syncEngine.UnregisterDeviceAsync(device.DeviceId);
+            if (!success)
+            {
+                return;
+            }
+
+            await RefreshDeviceListAsync(force: true);
         }
 
         private void UpdateHomeSummary()

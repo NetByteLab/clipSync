@@ -17,6 +17,12 @@ namespace ClipSync.WPF.Network
         public long ExpiresAt { get; set; }
     }
 
+    public class OperationResult
+    {
+        public bool Success { get; set; }
+        public string? Error { get; set; }
+    }
+
     public class HttpClient
     {
         private readonly SettingsManager _settingsManager;
@@ -185,6 +191,67 @@ namespace ClipSync.WPF.Network
                     Success = false,
                     Error = $"Connection error: {ex.Message}"
                 };
+            }
+        }
+
+        public async Task<OperationResult> DeleteDeviceAsync(string deviceId)
+        {
+            var httpUrl = _settingsManager.Settings.HttpUrl;
+            var url = $"{httpUrl}/api/v1/devices/{deviceId}";
+
+            var request = new HttpRequestMessage(HttpMethod.Delete, url);
+            request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue(
+                "Bearer", _settingsManager.Settings.Token);
+
+            try
+            {
+                AppLogger.Info("HttpClient", $"开始注销设备请求: url={url}, device_id={deviceId}");
+                var response = await _httpClient.SendAsync(request);
+                var responseJson = await response.Content.ReadAsStringAsync();
+
+                if (response.IsSuccessStatusCode)
+                {
+                    AppLogger.Info("HttpClient", $"注销设备成功: device_id={deviceId}");
+                    return new OperationResult
+                    {
+                        Success = true
+                    };
+                }
+
+                var error = TryParseError(responseJson) ?? "Device unregister failed";
+                AppLogger.Warn("HttpClient", $"注销设备失败: status={(int)response.StatusCode}, device_id={deviceId}, error={error}");
+                return new OperationResult
+                {
+                    Success = false,
+                    Error = error
+                };
+            }
+            catch (Exception ex)
+            {
+                AppLogger.Error("HttpClient", $"注销设备异常: device_id={deviceId}, url={url}", ex);
+                return new OperationResult
+                {
+                    Success = false,
+                    Error = $"Connection error: {ex.Message}"
+                };
+            }
+        }
+
+        private static string? TryParseError(string responseJson)
+        {
+            if (string.IsNullOrWhiteSpace(responseJson))
+            {
+                return null;
+            }
+
+            try
+            {
+                var error = JObject.Parse(responseJson);
+                return error.Value<string>("error");
+            }
+            catch
+            {
+                return null;
             }
         }
     }
