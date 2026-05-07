@@ -31,6 +31,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.booleanOrNull
@@ -101,6 +102,7 @@ class ClipboardService : Service() {
         // Setup WebSocket message handling
         setupMessageHandler()
         observeConnectionState()
+        observeSettingsChanges()
 
         // Setup clipboard change monitoring
         setupClipboardMonitoring()
@@ -275,6 +277,55 @@ class ClipboardService : Service() {
             }.orEmpty()
             database.deviceDao().insertAll(devices)
             FileLogger.d(TAG, "Device list saved: count=${devices.size}")
+        }
+    }
+
+    private fun observeSettingsChanges() {
+        serviceScope.launch {
+            settingsManager.serverUrlFlow
+                .distinctUntilChanged()
+                .collectLatest { url ->
+                    if (!settingsManager.isLoggedIn()) return@collectLatest
+                    if (url.isBlank()) return@collectLatest
+                    FileLogger.d(TAG, "Observed server url change, reconnecting service WebSocket")
+                    webSocketClient.connect(url)
+                }
+        }
+
+        serviceScope.launch {
+            settingsManager.deviceNameFlow
+                .distinctUntilChanged()
+                .collectLatest {
+                    if (webSocketClient.isConnected()) {
+                        FileLogger.d(TAG, "Observed device name change, re-sending auth")
+                        sendAuth()
+                    }
+                }
+        }
+
+        serviceScope.launch {
+            settingsManager.encryptionEnabledFlow
+                .distinctUntilChanged()
+                .collectLatest {
+                    if (webSocketClient.isConnected()) {
+                        FileLogger.d(TAG, "Observed encryption setting change, refreshing auth state")
+                        sendAuth()
+                    }
+                }
+        }
+
+        serviceScope.launch {
+            settingsManager.syncEnabledFlow
+                .distinctUntilChanged()
+                .collectLatest { enabled ->
+                    FileLogger.d(TAG, "Observed sync enabled change: enabled=$enabled")
+                    if (!enabled) {
+                        _syncStatus.value = SyncStatus.Paused
+                    } else if (webSocketClient.isConnected()) {
+                        _syncStatus.value = SyncStatus.Active
+                        refreshClipboardNow()
+                    }
+                }
         }
     }
 

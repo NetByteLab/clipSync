@@ -35,6 +35,7 @@
     <string name="notification_service_text">Monitoring clipboard for sync</string>
     <string name="ime_service_name">ClipSync Keyboard</string>
     <string name="ime_subtype_en">English</string>
+    <string name="ime_subtype_zh">中文</string>
     <string name="ime_status_connecting">Connecting</string>
     <string name="ime_status_connected">Synced</string>
     <string name="ime_status_disconnected">Offline</string>
@@ -61,13 +62,19 @@
     <string name="ime_action_english">英</string>
     <string name="ime_action_switch_keyboard">⌨</string>
     <string name="ime_action_shift">shift</string>
+    <string name="ime_action_caps_lock">caps</string>
     <string name="ime_action_symbols">#+=</string>
     <string name="ime_action_numbers">123</string>
     <string name="ime_action_letters">ABC</string>
     <string name="ime_action_next_keyboard">globe</string>
+    <string name="ime_action_prev_page">◀</string>
+    <string name="ime_action_next_page">▶</string>
+    <string name="ime_action_cursor_left">←</string>
+    <string name="ime_action_cursor_right">→</string>
     <string name="ime_composing_hint">拼音输入</string>
     <string name="ime_composing_prefix">拼音: %1$s</string>
     <string name="ime_candidate_raw">输入 %1$s</string>
+    <string name="ime_candidate_page">%1$d/%2$d</string>
     <string name="nav_home">Home</string>
     <string name="nav_history">History</string>
     <string name="nav_devices">Devices</string>

@@ -9,4 +9,11 @@
         android:imeSubtypeMode="keyboard"
         android:isAuxiliary="false"
         android:label="@string/ime_subtype_en" />
+
+    <subtype
+        android:icon="@mipmap/ic_launcher"
+        android:imeSubtypeLocale="zh_CN"
+        android:imeSubtypeMode="keyboard"
+        android:isAuxiliary="false"
+        android:label="@string/ime_subtype_zh" />
 </input-method>

@@ -30,6 +30,7 @@ class WebSocketClient {
 
     private var webSocket: WebSocket? = null
     private var client: OkHttpClient? = null
+    private var lastUrl: String? = null
 
     private val _messages = MutableSharedFlow<String>(extraBufferCapacity = 8)
     val messages: SharedFlow<String> = _messages.asSharedFlow()
@@ -91,11 +92,29 @@ class WebSocketClient {
      * Connect to the WebSocket server.
      */
     fun connect(url: String) {
-        if (_connectionState.value == ConnectionState.Connected) {
-            FileLogger.w(TAG, "Already connected, ignoring connect call")
+        if (_connectionState.value == ConnectionState.Connecting && lastUrl == url) {
+            FileLogger.d(TAG, "Already connecting to $url, ignoring duplicate connect call")
             return
         }
+        if (_connectionState.value == ConnectionState.Connected) {
+            if (lastUrl == url) {
+                FileLogger.w(TAG, "Already connected, ignoring connect call")
+                return
+            }
+            FileLogger.d(TAG, "Switching WebSocket connection to new url: $url")
+            disconnect()
+        }
 
+        if (lastUrl != null && lastUrl != url) {
+            disconnect()
+        }
+
+        lastUrl = url
+        client?.dispatcher?.executorService?.shutdown()
+        client?.connectionPool?.evictAll()
+        client = null
+        webSocket = null
+        reconnectHandler.cancel()
         reconnectHandler.trackConnection(url)
         _connectionState.value = ConnectionState.Connecting
         FileLogger.d(TAG, "Connecting to $url")
@@ -112,6 +131,17 @@ class WebSocketClient {
             .build()
 
         webSocket = client?.newWebSocket(request, listener)
+    }
+
+    fun reconnect() {
+        val url = lastUrl
+        if (url.isNullOrBlank()) {
+            FileLogger.w(TAG, "Cannot reconnect: no previous url recorded")
+            return
+        }
+        FileLogger.d(TAG, "Reconnecting to $url")
+        disconnect()
+        connect(url)
     }
 
     /**
@@ -141,6 +171,8 @@ class WebSocketClient {
         reconnectHandler.cancel()
         webSocket?.close(NORMAL_CLOSE_CODE, "Client disconnect")
         webSocket = null
+        client?.dispatcher?.executorService?.shutdown()
+        client?.connectionPool?.evictAll()
         client = null
         _connectionState.value = ConnectionState.Disconnected
     }

@@ -41,6 +41,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.booleanOrNull
@@ -60,6 +61,7 @@ class ClipSyncInputMethodService : InputMethodService() {
 
     private var keyboardMode = KeyboardMode.Letters
     private var isUppercase = false
+    private var isCapsLockEnabled = false
     private var isChineseMode = false
     private var currentConnectionState: ConnectionState = ConnectionState.Disconnected
     private var activePanel = ImePanel.Clipboard
@@ -70,6 +72,9 @@ class ClipSyncInputMethodService : InputMethodService() {
     private var onlineDevices: List<DeviceEntity> = emptyList()
     private var composingPinyin = ""
     private var composingCandidates: List<String> = emptyList()
+    private var candidatePageIndex = 0
+    private var totalCandidatePages = 0
+    private var lastShiftTapAt = 0L
 
     private val deleteRepeatHandler = Handler(Looper.getMainLooper())
     private val deleteRepeatRunnable = object : Runnable {
@@ -83,6 +88,7 @@ class ClipSyncInputMethodService : InputMethodService() {
     private var statusBadgeView: TextView? = null
     private var composingBar: LinearLayout? = null
     private var composingTextView: TextView? = null
+    private var composingPageView: TextView? = null
     private var candidateRow: LinearLayout? = null
     private var candidateScrollView: HorizontalScrollView? = null
     private var panelToggleRow: LinearLayout? = null
@@ -110,6 +116,7 @@ class ClipSyncInputMethodService : InputMethodService() {
         observeLocalData()
         observeConnectionState()
         observeMessages()
+        observeSettings()
     }
 
     override fun onCreateInputView(): View {
@@ -282,6 +289,13 @@ class ClipSyncInputMethodService : InputMethodService() {
         }
         composingBar?.addView(composingTextView)
 
+        composingPageView = TextView(this).apply {
+            setTextColor(Color.parseColor("#64748B"))
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+            setPadding(0, dp(4), 0, 0)
+        }
+        composingBar?.addView(composingPageView)
+
         candidateScrollView = HorizontalScrollView(this).apply {
             isHorizontalScrollBarEnabled = false
             setPadding(0, dp(8), 0, 0)
@@ -422,8 +436,10 @@ class ClipSyncInputMethodService : InputMethodService() {
                     KeySpec.Special(SpecialKey.SystemKeyboard, getString(R.string.ime_action_switch_keyboard), 1.05f),
                     KeySpec.Special(SpecialKey.ToggleLanguage, resolveLanguageToggleLabel(), 1f),
                     KeySpec.Special(SpecialKey.ModeNumbers, getString(R.string.ime_action_numbers), 1f),
+                    KeySpec.Special(SpecialKey.CursorLeft, getString(R.string.ime_action_cursor_left), 0.8f),
+                    KeySpec.Special(SpecialKey.Space, resolveSpaceLabel(), 2.8f),
+                    KeySpec.Special(SpecialKey.CursorRight, getString(R.string.ime_action_cursor_right), 0.8f),
                     KeySpec.Text(resolveCommaLabel(), resolveCommaOutput(), 0.8f),
-                    KeySpec.Special(SpecialKey.Space, resolveSpaceLabel(), 3.6f),
                     KeySpec.Text(resolvePeriodLabel(), resolvePeriodOutput(), 0.8f),
                     KeySpec.Special(SpecialKey.Enter, resolveEnterLabel(), 1.2f)
                 )
@@ -442,8 +458,10 @@ class ClipSyncInputMethodService : InputMethodService() {
                     KeySpec.Special(SpecialKey.SystemKeyboard, getString(R.string.ime_action_switch_keyboard), 1.05f),
                     KeySpec.Special(SpecialKey.ToggleLanguage, resolveLanguageToggleLabel(), 1f),
                     KeySpec.Special(SpecialKey.ModeLetters, getString(R.string.ime_action_letters), 1f),
+                    KeySpec.Special(SpecialKey.CursorLeft, getString(R.string.ime_action_cursor_left), 0.8f),
+                    KeySpec.Special(SpecialKey.Space, resolveSpaceLabel(), 2.8f),
+                    KeySpec.Special(SpecialKey.CursorRight, getString(R.string.ime_action_cursor_right), 0.8f),
                     KeySpec.Text(resolveCommaLabel(), resolveCommaOutput(), 0.8f),
-                    KeySpec.Special(SpecialKey.Space, resolveSpaceLabel(), 3.6f),
                     KeySpec.Text(resolvePeriodLabel(), resolvePeriodOutput(), 0.8f),
                     KeySpec.Special(SpecialKey.Enter, resolveEnterLabel(), 1.2f)
                 )
@@ -462,8 +480,10 @@ class ClipSyncInputMethodService : InputMethodService() {
                     KeySpec.Special(SpecialKey.SystemKeyboard, getString(R.string.ime_action_switch_keyboard), 1.05f),
                     KeySpec.Special(SpecialKey.ToggleLanguage, resolveLanguageToggleLabel(), 1f),
                     KeySpec.Special(SpecialKey.ModeLetters, getString(R.string.ime_action_letters), 1f),
+                    KeySpec.Special(SpecialKey.CursorLeft, getString(R.string.ime_action_cursor_left), 0.8f),
+                    KeySpec.Special(SpecialKey.Space, resolveSpaceLabel(), 2.8f),
+                    KeySpec.Special(SpecialKey.CursorRight, getString(R.string.ime_action_cursor_right), 0.8f),
                     KeySpec.Text("-", "-", 0.8f),
-                    KeySpec.Special(SpecialKey.Space, resolveSpaceLabel(), 3.6f),
                     KeySpec.Text("@", "@", 0.8f),
                     KeySpec.Special(SpecialKey.Enter, resolveEnterLabel(), 1.2f)
                 )
@@ -512,9 +532,23 @@ class ClipSyncInputMethodService : InputMethodService() {
                 }
             }
 
+            if (key is KeySpec.Special && key.action == SpecialKey.Shift) {
+                setOnLongClickListener {
+                    toggleCapsLock()
+                    true
+                }
+            }
+
             if (key is KeySpec.Special && key.action == SpecialKey.SystemKeyboard) {
                 setOnLongClickListener {
                     showInputMethodPicker()
+                    true
+                }
+            }
+
+            if (key is KeySpec.Text && keyboardMode == KeyboardMode.Symbols) {
+                setOnLongClickListener {
+                    handleSymbolLongPress(key)
                     true
                 }
             }
@@ -549,7 +583,14 @@ class ClipSyncInputMethodService : InputMethodService() {
         when (action) {
             SpecialKey.Shift -> {
                 if (!isChineseMode) {
-                    isUppercase = !isUppercase
+                    val now = System.currentTimeMillis()
+                    if (now - lastShiftTapAt <= DOUBLE_TAP_WINDOW_MS) {
+                        toggleCapsLock()
+                    } else {
+                        isCapsLockEnabled = false
+                        isUppercase = !isUppercase
+                    }
+                    lastShiftTapAt = now
                     renderKeyboard()
                 }
             }
@@ -609,6 +650,24 @@ class ClipSyncInputMethodService : InputMethodService() {
                 renderComposingBar()
                 renderKeyboard()
             }
+
+            SpecialKey.CandidatePrevPage -> {
+                if (candidatePageIndex > 0) {
+                    candidatePageIndex -= 1
+                    updateComposingState()
+                }
+            }
+
+            SpecialKey.CandidateNextPage -> {
+                if (candidatePageIndex + 1 < totalCandidatePages) {
+                    candidatePageIndex += 1
+                    updateComposingState()
+                }
+            }
+
+            SpecialKey.CursorLeft -> moveCursor(-1)
+
+            SpecialKey.CursorRight -> moveCursor(1)
 
             SpecialKey.SystemKeyboard -> switchToSystemKeyboard()
         }
@@ -678,6 +737,42 @@ class ClipSyncInputMethodService : InputMethodService() {
             webSocketClient.messages.collectLatest { message ->
                 handleWebSocketMessage(message)
             }
+        }
+    }
+
+    private fun observeSettings() {
+        scope.launch {
+            settingsManager.serverUrlFlow
+                .distinctUntilChanged()
+                .collectLatest { url ->
+                    if (url.isBlank()) return@collectLatest
+                    if (currentConnectionState is ConnectionState.Connected || currentConnectionState == ConnectionState.Connecting) {
+                        FileLogger.d(TAG, "IME observed server url change, reconnecting")
+                        webSocketClient.connect(url)
+                    }
+                }
+        }
+
+        scope.launch {
+            settingsManager.deviceNameFlow
+                .distinctUntilChanged()
+                .collectLatest {
+                    if (webSocketClient.isConnected()) {
+                        FileLogger.d(TAG, "IME observed device name change, re-sending auth")
+                        sendAuth()
+                    }
+                }
+        }
+
+        scope.launch {
+            settingsManager.encryptionEnabledFlow
+                .distinctUntilChanged()
+                .collectLatest {
+                    if (webSocketClient.isConnected()) {
+                        FileLogger.d(TAG, "IME observed encryption change, refreshing auth")
+                        sendAuth()
+                    }
+                }
         }
     }
 
@@ -977,6 +1072,10 @@ class ClipSyncInputMethodService : InputMethodService() {
     }
 
     private fun syncShiftStateForCursor(force: Boolean = false) {
+        if (isCapsLockEnabled) {
+            isUppercase = true
+            return
+        }
         val newUppercase = shouldAutoCapitalize(currentEditorInfo)
         if (force || newUppercase != isUppercase) {
             isUppercase = newUppercase
@@ -1123,17 +1222,26 @@ class ClipSyncInputMethodService : InputMethodService() {
 
     private fun appendPinyin(value: String) {
         composingPinyin += value.lowercase()
+        candidatePageIndex = 0
         updateComposingState()
     }
 
     private fun removeLastPinyinLetter() {
         if (composingPinyin.isEmpty()) return
         composingPinyin = composingPinyin.dropLast(1)
+        candidatePageIndex = 0
         updateComposingState()
     }
 
     private fun updateComposingState() {
-        composingCandidates = PinyinCandidateEngine.getCandidates(composingPinyin, CANDIDATE_LIMIT)
+        val page = PinyinCandidateEngine.getCandidatePage(
+            pinyin = composingPinyin,
+            pageIndex = candidatePageIndex,
+            pageSize = CANDIDATE_LIMIT
+        )
+        candidatePageIndex = page.pageIndex
+        totalCandidatePages = page.totalPages
+        composingCandidates = page.items.map { it.text }
         if (composingPinyin.isEmpty()) {
             currentInputConnection?.finishComposingText()
         } else {
@@ -1166,6 +1274,7 @@ class ClipSyncInputMethodService : InputMethodService() {
     private fun renderComposingBar() {
         val bar = composingBar ?: return
         val textView = composingTextView ?: return
+        val pageView = composingPageView ?: return
         val row = candidateRow ?: return
 
         val visible = isChineseMode && keyboardMode == KeyboardMode.Letters
@@ -1177,10 +1286,21 @@ class ClipSyncInputMethodService : InputMethodService() {
         } else {
             getString(R.string.ime_composing_prefix, composingPinyin)
         }
+        pageView.text = if (composingPinyin.isBlank() || totalCandidatePages <= 1) {
+            ""
+        } else {
+            getString(R.string.ime_candidate_page, candidatePageIndex + 1, totalCandidatePages)
+        }
 
         row.removeAllViews()
         if (composingPinyin.isBlank()) {
             return
+        }
+
+        if (candidatePageIndex > 0) {
+            row.addView(createCandidateChip(getString(R.string.ime_action_prev_page), emphasized = false) {
+                handleSpecialKey(SpecialKey.CandidatePrevPage)
+            })
         }
 
         if (composingCandidates.isEmpty()) {
@@ -1205,6 +1325,12 @@ class ClipSyncInputMethodService : InputMethodService() {
             commitComposingText(selected = composingPinyin)
         })
 
+        if (candidatePageIndex + 1 < totalCandidatePages) {
+            row.addView(createCandidateChip(getString(R.string.ime_action_next_page), emphasized = false) {
+                handleSpecialKey(SpecialKey.CandidateNextPage)
+            })
+        }
+
         candidateScrollView?.post { candidateScrollView?.scrollTo(0, 0) }
     }
 
@@ -1227,7 +1353,45 @@ class ClipSyncInputMethodService : InputMethodService() {
                 rightMargin = dp(6)
             }
             setOnClickListener { onClick() }
+            setOnLongClickListener {
+                currentInputConnection?.commitText(label.substringAfter(". ", label), 1)
+                true
+            }
         }
+    }
+
+    private fun toggleCapsLock() {
+        isCapsLockEnabled = !isCapsLockEnabled
+        isUppercase = isCapsLockEnabled || !isUppercase
+        renderKeyboard()
+    }
+
+    private fun moveCursor(offset: Int) {
+        if (composingPinyin.isNotEmpty()) {
+            commitComposingText()
+        }
+        val extracted = currentInputConnection?.getExtractedText(
+            android.view.inputmethod.ExtractedTextRequest(),
+            0
+        )
+        val current = extracted?.selectionStart ?: 0
+        val target = (current + offset).coerceAtLeast(0)
+        currentInputConnection?.setSelection(target, target)
+    }
+
+    private fun handleSymbolLongPress(key: KeySpec.Text) {
+        val alternate = when (key.output) {
+            "." -> "…"
+            "," -> "、"
+            "?" -> "？"
+            "!" -> "！"
+            ":" -> "："
+            ";" -> "；"
+            "-" -> "_"
+            "@" -> "#"
+            else -> key.output
+        }
+        currentInputConnection?.commitText(alternate, 1)
     }
 
     private fun createContainerBackground(fillColor: Int, strokeColor: Int, radiusDp: Int): GradientDrawable {
@@ -1250,7 +1414,8 @@ class ClipSyncInputMethodService : InputMethodService() {
         private const val TAG = "ClipSyncIME"
         private const val DELETE_REPEAT_START_DELAY_MS = 350L
         private const val DELETE_REPEAT_INTERVAL_MS = 50L
-        private const val CANDIDATE_LIMIT = 12
+        private const val CANDIDATE_LIMIT = 8
+        private const val DOUBLE_TAP_WINDOW_MS = 280L
     }
 }
 
@@ -1275,6 +1440,10 @@ private enum class SpecialKey {
     Delete,
     Space,
     Enter,
+    CandidatePrevPage,
+    CandidateNextPage,
+    CursorLeft,
+    CursorRight,
     ModeLetters,
     ModeNumbers,
     ModeSymbols,
