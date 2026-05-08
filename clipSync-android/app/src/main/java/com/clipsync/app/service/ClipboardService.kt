@@ -124,6 +124,7 @@ class ClipboardService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         FileLogger.d(TAG, "Service started")
+        ensureServerConnection("service start")
         return START_STICKY
     }
 
@@ -168,16 +169,32 @@ class ClipboardService : Service() {
     }
 
     private fun connectToServer() {
+        ensureServerConnection("service create")
+    }
+
+    private fun ensureServerConnection(reason: String) {
         serviceScope.launch {
             val wsUrl = settingsManager.getServerUrl()
             val token = settingsManager.getToken()
 
             if (token.isEmpty()) {
-                FileLogger.w(TAG, "No token available, cannot connect")
+                FileLogger.w(TAG, "No token available, cannot connect ($reason)")
                 return@launch
             }
 
-            FileLogger.d(TAG, "Connecting service WebSocket to $wsUrl")
+            when (webSocketClient.connectionState.value) {
+                ConnectionState.Connected -> {
+                    FileLogger.d(TAG, "WebSocket already connected, skip connect ($reason)")
+                    return@launch
+                }
+                ConnectionState.Connecting -> {
+                    FileLogger.d(TAG, "WebSocket already connecting, skip connect ($reason)")
+                    return@launch
+                }
+                else -> Unit
+            }
+
+            FileLogger.d(TAG, "Connecting service WebSocket to $wsUrl ($reason)")
             webSocketClient.connect(wsUrl)
         }
     }

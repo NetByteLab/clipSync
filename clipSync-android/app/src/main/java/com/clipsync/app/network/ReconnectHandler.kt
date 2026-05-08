@@ -47,7 +47,6 @@ class ReconnectHandler(
             delay(delayMs)
             currentBackoffMs = (currentBackoffMs * 2).coerceAtMost(MAX_BACKOFF_MS)
             if (lastUrl.isNotEmpty()) {
-                onStateChange(ConnectionState.Connecting)
                 onReconnect(lastUrl)
             }
         }

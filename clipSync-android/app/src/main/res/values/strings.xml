@@ -75,6 +75,9 @@
     <string name="ime_composing_prefix">拼音: %1$s</string>
     <string name="ime_candidate_raw">输入 %1$s</string>
     <string name="ime_candidate_page">%1$d/%2$d</string>
+    <string name="ime_candidate_action_pin">固定短语</string>
+    <string name="ime_candidate_action_unpin">取消固定</string>
+    <string name="ime_candidate_action_clear_learning">清除学习</string>
     <string name="nav_home">Home</string>
     <string name="nav_history">History</string>
     <string name="nav_devices">Devices</string>

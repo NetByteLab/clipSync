@@ -16,6 +16,9 @@ data class CandidatePage(
 
 object PinyinCandidateEngine {
 
+    private var learnedWeights: Map<String, Int> = emptyMap()
+    private var pinnedPhrases: Map<String, String> = emptyMap()
+
     private val fuzzyGroups = listOf(
         setOf("z", "zh"),
         setOf("c", "ch"),
@@ -386,6 +389,14 @@ object PinyinCandidateEngine {
         return getCandidatePage(pinyin = pinyin, pageIndex = 0, pageSize = limit).items.map { it.text }
     }
 
+    fun setLearnedWeights(weights: Map<String, Int>) {
+        learnedWeights = weights
+    }
+
+    fun setPinnedPhrases(phrases: Map<String, String>) {
+        pinnedPhrases = phrases
+    }
+
     fun getCandidatePage(
         pinyin: String,
         pageIndex: Int = 0,
@@ -405,11 +416,23 @@ object PinyinCandidateEngine {
         val ranked = linkedMapOf<String, PinyinCandidate>()
         val fuzzyForms = expandFuzzy(normalized)
 
+        pinnedPhrases[normalized]?.let { pinned ->
+            mergeCandidate(
+                ranked = ranked,
+                text = pinned,
+                sourcePinyin = normalized,
+                score = PINNED_PHRASE_SCORE
+            )
+        }
+
         fuzzyForms.forEach { query ->
             val exactEntries = exactIndex[query].orEmpty()
             exactEntries.forEach { entry ->
                 entry.words.forEachIndexed { index, word ->
-                    val score = entry.baseScore + exactBonus(query, normalized) - index * 18
+                    val score = entry.baseScore +
+                        exactBonus(query, normalized) -
+                        index * 18 +
+                        learnedBonus(entry.pinyin, word)
                     mergeCandidate(ranked, word, entry.pinyin, score)
                 }
             }
@@ -420,11 +443,24 @@ object PinyinCandidateEngine {
                     val prefixPenalty = (key.length - query.length) * 40
                     values.forEach { entry ->
                         entry.words.forEachIndexed { index, word ->
-                            val score = entry.baseScore - prefixPenalty - index * 15 - fuzzyPenalty(query, normalized)
+                            val score = entry.baseScore -
+                                prefixPenalty -
+                                index * 15 -
+                                fuzzyPenalty(query, normalized) +
+                                learnedBonus(entry.pinyin, word)
                             mergeCandidate(ranked, word, entry.pinyin, score)
-                        }
                     }
                 }
+            }
+        }
+
+        buildSegmentedCandidates(normalized).forEach { candidate ->
+            mergeCandidate(
+                ranked = ranked,
+                text = candidate.text,
+                sourcePinyin = candidate.sourcePinyin,
+                score = candidate.score
+            )
         }
 
         val rankedList = ranked.values
@@ -494,6 +530,95 @@ object PinyinCandidateEngine {
         }
     }
 
+    private fun learnedBonus(pinyin: String, text: String): Int {
+        return (learnedWeights["$pinyin|$text"] ?: 0) * LEARNED_WEIGHT_STEP
+    }
+
+    private fun buildSegmentedCandidates(pinyin: String): List<PinyinCandidate> {
+        if (pinyin.length < 4) return emptyList()
+
+        val combinations = segmentPinyin(pinyin)
+        val results = mutableListOf<PinyinCandidate>()
+
+        combinations.forEach { segments ->
+            if (segments.size < 2) return@forEach
+
+            for (takeCount in 2..segments.size) {
+                val consumedSegments = segments.take(takeCount)
+                val candidate = buildCandidateFromSegments(
+                    segments = consumedSegments,
+                    fullInput = pinyin,
+                    allowTrailingRemainder = takeCount < segments.size
+                )
+                if (candidate != null) {
+                    results += candidate
+                }
+            }
+        }
+
+        return results
+    }
+
+    private fun buildCandidateFromSegments(
+        segments: List<String>,
+        fullInput: String,
+        allowTrailingRemainder: Boolean
+    ): PinyinCandidate? {
+        val chosenWords = mutableListOf<String>()
+        var totalScore = 0
+
+        segments.forEachIndexed { index, segment ->
+            val bestEntry = exactIndex[segment]
+                .orEmpty()
+                .maxByOrNull { entry -> entry.baseScore }
+                ?: return null
+            val bestWord = bestEntry.words.firstOrNull() ?: return null
+            chosenWords += bestWord
+            totalScore += bestEntry.baseScore - index * 22 + learnedBonus(segment, bestWord)
+        }
+
+        val consumedPinyin = segments.joinToString(separator = "")
+        val trailingRemainder = fullInput.removePrefix(consumedPinyin)
+        val remainderPenalty = if (allowTrailingRemainder && trailingRemainder.isNotEmpty()) 110 else 0
+
+        return PinyinCandidate(
+            text = chosenWords.joinToString(separator = ""),
+            sourcePinyin = segments.joinToString(separator = "'"),
+            score = totalScore + segmentedPhraseBonus(segments) - remainderPenalty
+        )
+    }
+
+    private fun segmentPinyin(pinyin: String): List<List<String>> {
+        val memo = mutableMapOf<Int, List<List<String>>>()
+
+        fun dfs(start: Int): List<List<String>> {
+            memo[start]?.let { return it }
+            if (start == pinyin.length) {
+                return listOf(emptyList())
+            }
+
+            val results = mutableListOf<List<String>>()
+            val upperBound = minOf(pinyin.length, start + MAX_SEGMENT_LENGTH)
+            for (end in start + 1..upperBound) {
+                val segment = pinyin.substring(start, end)
+                if (!exactIndex.containsKey(segment)) continue
+
+                dfs(end).forEach { suffix ->
+                    results += listOf(segment) + suffix
+                }
+            }
+
+            return results.sortedWith(
+                compareBy<List<String>> { it.size }
+                    .thenBy { segments -> segments.sumOf { it.length } }
+            ).take(MAX_SEGMENT_COMBINATIONS).also {
+                memo[start] = it
+            }
+        }
+
+        return dfs(0)
+    }
+
     private fun fuzzyPenalty(candidateQuery: String, userQuery: String): Int {
         return if (candidateQuery == userQuery) 0 else 120
     }
@@ -505,6 +630,18 @@ object PinyinCandidateEngine {
             text.length == 2 -> 20
             else -> 0
         }
+    }
+
+    private fun segmentedPhraseBonus(segments: List<String>): Int {
+        val segmentCountBonus = when (segments.size) {
+            2 -> 140
+            3 -> 90
+            else -> 40
+        }
+        val syllableBonus = segments.fold(0) { total, segment ->
+            total + if (segment.length >= 2) 12 else 0
+        }
+        return segmentCountBonus + syllableBonus
     }
 
     private fun mergeCandidate(
@@ -532,4 +669,9 @@ object PinyinCandidateEngine {
         val words: List<String>,
         val baseScore: Int
     )
+
+    private const val MAX_SEGMENT_LENGTH = 6
+    private const val MAX_SEGMENT_COMBINATIONS = 8
+    private const val LEARNED_WEIGHT_STEP = 1200
+    private const val PINNED_PHRASE_SCORE = 20_000
 }

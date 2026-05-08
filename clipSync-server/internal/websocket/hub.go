@@ -74,7 +74,6 @@ func (h *Hub) Run() {
 				close(client.Send)
 			}
 			h.mu.Unlock()
-			// Note: decrementCount() is already called in readPump defer, don't double-count
 			log.Printf("[WS] Client unregistered: %s - Total: %d", client.DeviceName, h.ClientCount())
 
 		case msg := <-h.broadcast:
@@ -148,6 +147,9 @@ func (h *Hub) incrementCount() {
 func (h *Hub) decrementCount() {
 	h.countMu.Lock()
 	defer h.countMu.Unlock()
+	if h.clientCount == 0 {
+		return
+	}
 	h.clientCount--
 }
 

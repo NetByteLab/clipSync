@@ -50,7 +50,9 @@ func (c *Client) readPump() {
 		_, message, err := c.Conn.ReadMessage()
 		if err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseNormalClosure, websocket.CloseAbnormalClosure) {
-				log.Printf("[WS] Error reading from %s: %v", c.ID, err)
+				log.Printf("[WS] Error reading from %s (%s/%s): %v", c.ID, c.DeviceName, c.Platform, err)
+			} else {
+				log.Printf("[WS] Read loop ended for %s (%s/%s): %v", c.ID, c.DeviceName, c.Platform, err)
 			}
 			break
 		}
@@ -88,6 +90,7 @@ func (c *Client) writePump() {
 			w, err := c.Conn.NextWriter(websocket.TextMessage)
 			if err != nil {
 				c.mu.Unlock()
+				log.Printf("[WS] Failed to create writer for %s (%s/%s): %v", c.ID, c.DeviceName, c.Platform, err)
 				return
 			}
 			w.Write(message)
@@ -101,6 +104,7 @@ func (c *Client) writePump() {
 
 			if err := w.Close(); err != nil {
 				c.mu.Unlock()
+				log.Printf("[WS] Failed to write message to %s (%s/%s): %v", c.ID, c.DeviceName, c.Platform, err)
 				return
 			}
 			c.mu.Unlock()
@@ -111,6 +115,7 @@ func (c *Client) writePump() {
 			c.Conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 			if err := c.Conn.WriteMessage(websocket.PingMessage, nil); err != nil {
 				c.mu.Unlock()
+				log.Printf("[WS] Failed to send ping to %s (%s/%s): %v", c.ID, c.DeviceName, c.Platform, err)
 				return
 			}
 			c.mu.Unlock()

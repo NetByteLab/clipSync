@@ -1,9 +1,9 @@
 package websocket
 
 import (
-	"fmt"
 	"clipsync-server/internal/auth"
 	"clipsync-server/internal/database"
+	"fmt"
 	"testing"
 	"time"
 )
@@ -33,21 +33,37 @@ func TestHub_ClientCount_Negative_Prevention(t *testing.T) {
 		t.Errorf("Expected initial ClientCount to be 0, got %d", hub.ClientCount())
 	}
 
-	// Test that direct increment/decrement work correctly
+	// Raw connection accounting can be called defensively during cleanup,
+	// but the externally visible client count must never go negative.
 	hub.incrementCount()
-	if hub.ClientCount() != 1 {
-		t.Errorf("Expected ClientCount to be 1 after increment, got %d", hub.ClientCount())
-	}
-
+	hub.decrementCount()
 	hub.decrementCount()
 	if hub.ClientCount() != 0 {
-		t.Errorf("Expected ClientCount to be 0 after decrement, got %d", hub.ClientCount())
+		t.Errorf("Expected ClientCount to stay at 0 after extra decrement, got %d", hub.ClientCount())
+	}
+}
+
+func TestHub_UnregisterIsIdempotent(t *testing.T) {
+	hub := setupTestHub(t)
+
+	client := &Client{
+		ID:         "test-client-idempotent",
+		DeviceName: "TestDevice",
+		Platform:   "android",
+		Send:       make(chan []byte, 256),
+		Hub:        hub,
 	}
 
-	// Note: In production, decrementCount is called in readPump defer,
-	// and incrementCount is called in HandleWebSocket.
-	// The count should never go negative if properly paired.
-	// This test verifies the counters themselves work correctly.
+	hub.register <- client
+	time.Sleep(50 * time.Millisecond)
+
+	hub.unregister <- client
+	hub.unregister <- client
+	time.Sleep(50 * time.Millisecond)
+
+	if hub.ClientCount() != 0 {
+		t.Fatalf("Expected ClientCount to stay at 0 after duplicate unregister, got %d", hub.ClientCount())
+	}
 }
 
 func TestHub_RegisterUnregister_ClientMap(t *testing.T) {

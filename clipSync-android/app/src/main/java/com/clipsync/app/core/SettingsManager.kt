@@ -29,6 +29,8 @@ class SettingsManager(private val context: Context) {
     private val DEVICE_NAME_KEY = stringPreferencesKey("device_name")
     private val SYNC_ENABLED_KEY = booleanPreferencesKey("sync_enabled")
     private val ENCRYPTION_ENABLED_KEY = booleanPreferencesKey("encryption_enabled")
+    private val IME_LEARNED_WEIGHTS_KEY = stringPreferencesKey("ime_learned_weights")
+    private val IME_PINNED_PHRASES_KEY = stringPreferencesKey("ime_pinned_phrases")
 
     // Default values
     private val defaultWsUrl = "ws://8.141.100.238:8080/ws"
@@ -171,6 +173,75 @@ class SettingsManager(private val context: Context) {
         }
     }
 
+    // ─── IME Learned Weights ───
+
+    val imeLearnedWeightsFlow: Flow<Map<String, Int>> = context.dataStore.data.map { prefs ->
+        PinyinPreferenceStoreCodec.decodeLearnedWeights(prefs[IME_LEARNED_WEIGHTS_KEY].orEmpty())
+    }
+
+    suspend fun getImeLearnedWeights(): Map<String, Int> = imeLearnedWeightsFlow.first()
+
+    suspend fun incrementImeLearnedWeight(pinyin: String, text: String) {
+        val key = "${pinyin}|${text}"
+        context.dataStore.edit { prefs ->
+            val current = PinyinPreferenceStoreCodec
+                .decodeLearnedWeights(prefs[IME_LEARNED_WEIGHTS_KEY].orEmpty())
+                .toMutableMap()
+            current[key] = (current[key] ?: 0) + 1
+            prefs[IME_LEARNED_WEIGHTS_KEY] = PinyinPreferenceStoreCodec.encodeLearnedWeights(current)
+        }
+    }
+
+    suspend fun pinImeLearnedWeight(pinyin: String, text: String) {
+        val key = "${pinyin}|${text}"
+        context.dataStore.edit { prefs ->
+            val current = PinyinPreferenceStoreCodec
+                .decodeLearnedWeights(prefs[IME_LEARNED_WEIGHTS_KEY].orEmpty())
+                .toMutableMap()
+            current[key] = MAX_IME_PINNED_WEIGHT
+            prefs[IME_LEARNED_WEIGHTS_KEY] = PinyinPreferenceStoreCodec.encodeLearnedWeights(current)
+        }
+    }
+
+    suspend fun removeImeLearnedWeight(pinyin: String, text: String) {
+        val key = "${pinyin}|${text}"
+        context.dataStore.edit { prefs ->
+            val current = PinyinPreferenceStoreCodec
+                .decodeLearnedWeights(prefs[IME_LEARNED_WEIGHTS_KEY].orEmpty())
+                .toMutableMap()
+            current.remove(key)
+            prefs[IME_LEARNED_WEIGHTS_KEY] = PinyinPreferenceStoreCodec.encodeLearnedWeights(current)
+        }
+    }
+
+    // ─── IME Pinned Phrases ───
+
+    val imePinnedPhrasesFlow: Flow<Map<String, String>> = context.dataStore.data.map { prefs ->
+        PinyinPreferenceStoreCodec.decodePinnedPhrases(prefs[IME_PINNED_PHRASES_KEY].orEmpty())
+    }
+
+    suspend fun getImePinnedPhrases(): Map<String, String> = imePinnedPhrasesFlow.first()
+
+    suspend fun setImePinnedPhrase(pinyin: String, text: String) {
+        context.dataStore.edit { prefs ->
+            val current = PinyinPreferenceStoreCodec
+                .decodePinnedPhrases(prefs[IME_PINNED_PHRASES_KEY].orEmpty())
+                .toMutableMap()
+            current[pinyin] = text
+            prefs[IME_PINNED_PHRASES_KEY] = PinyinPreferenceStoreCodec.encodePinnedPhrases(current)
+        }
+    }
+
+    suspend fun removeImePinnedPhrase(pinyin: String) {
+        context.dataStore.edit { prefs ->
+            val current = PinyinPreferenceStoreCodec
+                .decodePinnedPhrases(prefs[IME_PINNED_PHRASES_KEY].orEmpty())
+                .toMutableMap()
+            current.remove(pinyin)
+            prefs[IME_PINNED_PHRASES_KEY] = PinyinPreferenceStoreCodec.encodePinnedPhrases(current)
+        }
+    }
+
     // ─── Clear all settings ───
 
     suspend fun clearAll() {
@@ -183,5 +254,9 @@ class SettingsManager(private val context: Context) {
 
     suspend fun isLoggedIn(): Boolean {
         return getToken().isNotEmpty() && getUsername().isNotEmpty()
+    }
+
+    private companion object {
+        const val MAX_IME_PINNED_WEIGHT = 10
     }
 }

@@ -19,6 +19,7 @@ import android.view.inputmethod.InputMethodManager
 import android.widget.Button
 import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
+import android.widget.PopupMenu
 import android.widget.ScrollView
 import android.widget.TextView
 import com.clipsync.app.R
@@ -112,6 +113,10 @@ class ClipSyncInputMethodService : InputMethodService() {
             settingsManager = settingsManager,
             database = database
         )
+        scope.launch(Dispatchers.IO) {
+            PinyinCandidateEngine.setLearnedWeights(settingsManager.getImeLearnedWeights())
+            PinyinCandidateEngine.setPinnedPhrases(settingsManager.getImePinnedPhrases())
+        }
 
         observeLocalData()
         observeConnectionState()
@@ -605,7 +610,7 @@ class ClipSyncInputMethodService : InputMethodService() {
 
             SpecialKey.Space -> {
                 if (composingPinyin.isNotEmpty()) {
-                    commitComposingText(appendSpace = true)
+                    commitComposingText()
                 } else {
                     currentInputConnection?.commitText(" ", 1)
                 }
@@ -614,8 +619,9 @@ class ClipSyncInputMethodService : InputMethodService() {
             SpecialKey.Enter -> {
                 if (composingPinyin.isNotEmpty()) {
                     commitComposingText()
+                } else {
+                    performEnterAction()
                 }
-                performEnterAction()
             }
 
             SpecialKey.ModeLetters -> {
@@ -1259,16 +1265,46 @@ class ClipSyncInputMethodService : InputMethodService() {
             return
         }
 
-        val committed = selected ?: composingCandidates.firstOrNull() ?: composingPinyin
+        val selectedCandidate = when {
+            selected == null -> PinyinCandidateEngine.getCandidatePage(
+                pinyin = composingPinyin,
+                pageIndex = candidatePageIndex,
+                pageSize = CANDIDATE_LIMIT
+            ).items.firstOrNull()
+            else -> PinyinCandidateEngine.getCandidatePage(
+                pinyin = composingPinyin,
+                pageIndex = candidatePageIndex,
+                pageSize = CANDIDATE_LIMIT
+            ).items.firstOrNull { it.text == selected }
+        }
+        val resolution = PinyinCompositionStateMachine.resolveSelection(
+            inputPinyin = composingPinyin,
+            selectedCandidate = selectedCandidate,
+            fallbackText = selected ?: composingCandidates.firstOrNull() ?: composingPinyin
+        )
+        selectedCandidate?.let { candidate ->
+            scope.launch(Dispatchers.IO) {
+                settingsManager.incrementImeLearnedWeight(candidate.sourcePinyin, candidate.text)
+                PinyinCandidateEngine.setLearnedWeights(settingsManager.getImeLearnedWeights())
+            }
+        }
+
         currentInputConnection?.finishComposingText()
-        currentInputConnection?.commitText(committed, 1)
+        currentInputConnection?.commitText(resolution.committedText, 1)
         if (appendSpace) {
             currentInputConnection?.commitText(" ", 1)
         }
-        composingPinyin = ""
-        composingCandidates = emptyList()
-        renderComposingBar()
-        renderKeyboard()
+
+        if (resolution.remainingPinyin.isBlank() || appendSpace) {
+            composingPinyin = ""
+            composingCandidates = emptyList()
+            renderComposingBar()
+            renderKeyboard()
+        } else {
+            composingPinyin = resolution.remainingPinyin
+            candidatePageIndex = 0
+            updateComposingState()
+        }
     }
 
     private fun renderComposingBar() {
@@ -1298,15 +1334,27 @@ class ClipSyncInputMethodService : InputMethodService() {
         }
 
         if (candidatePageIndex > 0) {
-            row.addView(createCandidateChip(getString(R.string.ime_action_prev_page), emphasized = false) {
-                handleSpecialKey(SpecialKey.CandidatePrevPage)
-            })
+            row.addView(
+                createCandidateChip(
+                    label = getString(R.string.ime_action_prev_page),
+                    emphasized = false,
+                    onClick = {
+                        handleSpecialKey(SpecialKey.CandidatePrevPage)
+                    }
+                )
+            )
         }
 
         if (composingCandidates.isEmpty()) {
-            row.addView(createCandidateChip(getString(R.string.ime_candidate_raw, composingPinyin), emphasized = true) {
-                commitComposingText(selected = composingPinyin)
-            })
+            row.addView(
+                createCandidateChip(
+                    label = getString(R.string.ime_candidate_raw, composingPinyin),
+                    emphasized = true,
+                    onClick = {
+                        commitComposingText(selected = composingPinyin)
+                    }
+                )
+            )
             return
         }
 
@@ -1314,27 +1362,48 @@ class ClipSyncInputMethodService : InputMethodService() {
             row.addView(
                 createCandidateChip(
                     label = "${index + 1}. $candidate",
-                    emphasized = index == 0
-                ) {
-                    commitComposingText(selected = candidate)
-                }
+                    emphasized = index == 0,
+                    onClick = {
+                        commitComposingText(selected = candidate)
+                    },
+                    onLongClick = { anchor ->
+                        showCandidateActionMenu(anchor, candidate)
+                    }
+                )
             )
         }
 
-        row.addView(createCandidateChip(getString(R.string.ime_candidate_raw, composingPinyin), emphasized = false) {
-            commitComposingText(selected = composingPinyin)
-        })
+        row.addView(
+            createCandidateChip(
+                label = getString(R.string.ime_candidate_raw, composingPinyin),
+                emphasized = false,
+                onClick = {
+                    commitComposingText(selected = composingPinyin)
+                }
+            )
+        )
 
         if (candidatePageIndex + 1 < totalCandidatePages) {
-            row.addView(createCandidateChip(getString(R.string.ime_action_next_page), emphasized = false) {
-                handleSpecialKey(SpecialKey.CandidateNextPage)
-            })
+            row.addView(
+                createCandidateChip(
+                    label = getString(R.string.ime_action_next_page),
+                    emphasized = false,
+                    onClick = {
+                        handleSpecialKey(SpecialKey.CandidateNextPage)
+                    }
+                )
+            )
         }
 
         candidateScrollView?.post { candidateScrollView?.scrollTo(0, 0) }
     }
 
-    private fun createCandidateChip(label: String, emphasized: Boolean, onClick: () -> Unit): View {
+    private fun createCandidateChip(
+        label: String,
+        emphasized: Boolean,
+        onClick: () -> Unit,
+        onLongClick: ((View) -> Unit)? = null
+    ): View {
         val fillColor = if (emphasized) Color.parseColor("#2563EB") else Color.parseColor("#FFFFFF")
         val textColor = if (emphasized) Color.parseColor("#FFFFFF") else Color.parseColor("#0F172A")
         val strokeColor = if (emphasized) Color.parseColor("#2563EB") else Color.parseColor("#D4DDEA")
@@ -1354,8 +1423,73 @@ class ClipSyncInputMethodService : InputMethodService() {
             }
             setOnClickListener { onClick() }
             setOnLongClickListener {
-                currentInputConnection?.commitText(label.substringAfter(". ", label), 1)
-                true
+                onLongClick?.let { action ->
+                    action(this)
+                    true
+                } ?: false
+            }
+        }
+    }
+
+    private fun showCandidateActionMenu(anchor: View, candidate: String) {
+        scope.launch(Dispatchers.IO) {
+            val pinnedPhrases = settingsManager.getImePinnedPhrases()
+            val actions = PinyinCandidateActionResolver.resolveActions(
+                composingPinyin = composingPinyin,
+                candidateText = candidate,
+                pinnedPhrases = pinnedPhrases
+            )
+            launch(Dispatchers.Main) {
+                PopupMenu(this@ClipSyncInputMethodService, anchor).apply {
+                    actions.forEachIndexed { index, action ->
+                        menu.add(0, index, index, resolveCandidateActionLabel(action))
+                    }
+                    setOnMenuItemClickListener { item ->
+                        val selectedAction = actions.getOrNull(item.itemId) ?: return@setOnMenuItemClickListener false
+                        handleCandidateAction(selectedAction, candidate)
+                        true
+                    }
+                    show()
+                }
+            }
+        }
+    }
+
+    private fun resolveCandidateActionLabel(action: PinyinCandidateAction): String {
+        return when (action) {
+            PinyinCandidateAction.PinPhrase -> getString(R.string.ime_candidate_action_pin)
+            PinyinCandidateAction.UnpinPhrase -> getString(R.string.ime_candidate_action_unpin)
+            PinyinCandidateAction.ClearLearning -> getString(R.string.ime_candidate_action_clear_learning)
+        }
+    }
+
+    private fun handleCandidateAction(action: PinyinCandidateAction, candidate: String) {
+        val candidateEntry = PinyinCandidateEngine.getCandidatePage(
+            pinyin = composingPinyin,
+            pageIndex = candidatePageIndex,
+            pageSize = CANDIDATE_LIMIT
+        ).items.firstOrNull { it.text == candidate } ?: return
+
+        scope.launch(Dispatchers.IO) {
+            when (action) {
+                PinyinCandidateAction.PinPhrase -> {
+                    settingsManager.setImePinnedPhrase(composingPinyin, candidateEntry.text)
+                    settingsManager.pinImeLearnedWeight(candidateEntry.sourcePinyin, candidateEntry.text)
+                }
+
+                PinyinCandidateAction.UnpinPhrase -> {
+                    settingsManager.removeImePinnedPhrase(composingPinyin)
+                }
+
+                PinyinCandidateAction.ClearLearning -> {
+                    settingsManager.removeImeLearnedWeight(candidateEntry.sourcePinyin, candidateEntry.text)
+                }
+            }
+
+            PinyinCandidateEngine.setLearnedWeights(settingsManager.getImeLearnedWeights())
+            PinyinCandidateEngine.setPinnedPhrases(settingsManager.getImePinnedPhrases())
+            launch(Dispatchers.Main) {
+                updateComposingState()
             }
         }
     }
