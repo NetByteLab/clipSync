@@ -1,0 +1,124 @@
+name: Deploy Server
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-server-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: clipSync-server/go.mod
+
+      - name: Run server tests
+        working-directory: clipSync-server
+        run: go test ./... -v -count=1
+
+      - name: Build Linux release binary
+        working-directory: clipSync-server
+        env:
+          GOOS: linux
+          GOARCH: amd64
+          CGO_ENABLED: "1"
+        run: go build -o bin/clipsync-server-linux ./cmd/server
+
+      - name: Assemble release bundle
+        env:
+          RELEASE_ARCHIVE: clipsync-server-release-${{ github.sha }}.tar.gz
+        run: |
+          mkdir -p release/clipSync-server/bin release/clipSync-server/configs
+          install -m 0755 clipSync-server/bin/clipsync-server-linux release/clipSync-server/bin/clipsync-server-linux
+          install -m 0644 clipSync-server/configs/config.yaml release/clipSync-server/configs/config.yaml
+          tar -C release -czf "$RELEASE_ARCHIVE" clipSync-server
+          echo "RELEASE_ARCHIVE=$RELEASE_ARCHIVE" >> "$GITHUB_ENV"
+
+      - name: Prepare SSH
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
+
+      - name: Upload release archive
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+        run: |
+          ssh_opts=(
+            -o BatchMode=yes
+            -o StrictHostKeyChecking=yes
+            -o ConnectTimeout=10
+            -o ConnectionAttempts=3
+            -o ServerAliveInterval=15
+            -o ServerAliveCountMax=3
+          )
+          remote_archive="/tmp/${RELEASE_ARCHIVE}"
+          scp "${ssh_opts[@]}" "$RELEASE_ARCHIVE" "${DEPLOY_USER}@${DEPLOY_HOST}:${remote_archive}"
+          echo "REMOTE_ARCHIVE=$remote_archive" >> "$GITHUB_ENV"
+
+      - name: Run remote deployment
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+          DEPLOY_SERVICE_NAME: ${{ secrets.DEPLOY_SERVICE_NAME }}
+        run: |
+          ssh_opts=(
+            -o BatchMode=yes
+            -o StrictHostKeyChecking=yes
+            -o ConnectTimeout=10
+            -o ConnectionAttempts=3
+            -o ServerAliveInterval=15
+            -o ServerAliveCountMax=3
+          )
+          {
+            printf 'export DEPLOY_ARCHIVE=%q\n' "$REMOTE_ARCHIVE"
+            printf 'export DEPLOY_PATH=%q\n' "$DEPLOY_PATH"
+            printf 'export DEPLOY_SERVICE_NAME=%q\n' "$DEPLOY_SERVICE_NAME"
+            cat scripts/deploy/server-release.sh
+          } | ssh "${ssh_opts[@]}" "${DEPLOY_USER}@${DEPLOY_HOST}" "bash -s"
+
+      - name: Verify deployed health endpoint
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_PUBLIC_HEALTH_URL: ${{ secrets.DEPLOY_PUBLIC_HEALTH_URL }}
+        run: |
+          health_url="${DEPLOY_PUBLIC_HEALTH_URL:-http://${DEPLOY_HOST}:8081/api/v1/health}"
+
+          for attempt in {1..10}; do
+            if response="$(curl --fail --silent --show-error --connect-timeout 5 --max-time 15 "$health_url")"; then
+              if grep -Eq '"status"[[:space:]]*:[[:space:]]*"ok"' <<<"$response"; then
+                echo "Health check passed on attempt $attempt"
+                exit 0
+              fi
+            fi
+
+            sleep 5
+          done
+
+          echo "Health check failed for $health_url" >&2
+          exit 1
