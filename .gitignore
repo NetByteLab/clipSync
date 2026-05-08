@@ -34,6 +34,7 @@ clipsync-server.exe
 
 # Secrets & Config
 .clipsync_secret
+tmp_deploy_id_ed25519
 
 # IDEs
 .idea/
