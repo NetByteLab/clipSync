@@ -138,6 +138,7 @@ resolve_release_root() {
 require_env DEPLOY_ARCHIVE
 require_env DEPLOY_PATH
 require_env DEPLOY_SERVICE_NAME
+require_env DEPLOY_JWT_SECRET
 
 DEPLOY_HEALTH_URL="${DEPLOY_HEALTH_URL:-http://127.0.0.1:8081/api/v1/health}"
 
@@ -190,6 +191,21 @@ trap 'rollback_on_error "$?"' ERR
 install -m 0755 "$NEW_BINARY" "$TEMP_BINARY"
 mv -f "$TEMP_BINARY" "$LIVE_BINARY"
 install -m 0644 "$NEW_CONFIG" "$LIVE_CONFIG"
+python3 - "$LIVE_CONFIG" "$DEPLOY_JWT_SECRET" <<'PY'
+import pathlib
+import sys
+
+config_path = pathlib.Path(sys.argv[1])
+jwt_secret = sys.argv[2]
+
+content = config_path.read_text(encoding="utf-8")
+needle = 'jwt_secret: "clipsync-secret-change-in-production"'
+
+if needle not in content:
+    raise SystemExit("Unable to locate jwt_secret placeholder in deployed config")
+
+config_path.write_text(content.replace(needle, f'jwt_secret: "{jwt_secret}"', 1), encoding="utf-8")
+PY
 
 if ! systemctl restart "$DEPLOY_SERVICE_NAME"; then
   echo "Service restart failed: $DEPLOY_SERVICE_NAME" >&2

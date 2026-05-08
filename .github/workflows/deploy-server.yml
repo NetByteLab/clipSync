@@ -86,6 +86,7 @@ jobs:
           DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
           DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
           DEPLOY_SERVICE_NAME: ${{ secrets.DEPLOY_SERVICE_NAME }}
+          DEPLOY_JWT_SECRET: ${{ secrets.DEPLOY_JWT_SECRET }}
         run: |
           ssh_opts=(
             -o BatchMode=yes
@@ -99,6 +100,7 @@ jobs:
             printf 'export DEPLOY_ARCHIVE=%q\n' "$REMOTE_ARCHIVE"
             printf 'export DEPLOY_PATH=%q\n' "$DEPLOY_PATH"
             printf 'export DEPLOY_SERVICE_NAME=%q\n' "$DEPLOY_SERVICE_NAME"
+            printf 'export DEPLOY_JWT_SECRET=%q\n' "$DEPLOY_JWT_SECRET"
             cat scripts/deploy/server-release.sh
           } | ssh "${ssh_opts[@]}" "${DEPLOY_USER}@${DEPLOY_HOST}" "bash -s"
 

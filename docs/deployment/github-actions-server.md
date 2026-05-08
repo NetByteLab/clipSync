@@ -27,12 +27,14 @@ Configure these repository secrets before enabling the workflow:
 | `DEPLOY_PATH` | `/opt/clipSync-server-src` | Live server directory that receives `bin/`, `configs/`, and preserved `data/` |
 | `DEPLOY_SERVICE_NAME` | `clipsync.service` | systemd service restarted during deploy and rollback |
 | `DEPLOY_KNOWN_HOSTS` | output of `ssh-keyscan -H 8.141.100.238` | Host key entry used for strict SSH host verification |
+| `DEPLOY_JWT_SECRET` | a long random secret | Injected into the deployed server config during deployment; do not store the live JWT secret in git |
 
 Notes:
 
 - `DEPLOY_SSH_KEY` must match the public key installed for `DEPLOY_USER` on the server.
 - `DEPLOY_KNOWN_HOSTS` is required because the workflow uses `StrictHostKeyChecking=yes`.
 - Keep `DEPLOY_PATH` and `DEPLOY_SERVICE_NAME` aligned with the actual server layout and systemd unit.
+- `DEPLOY_JWT_SECRET` should be treated as the real production JWT signing key. The repository config now keeps only the placeholder value.
 - Optional: `DEPLOY_PUBLIC_HEALTH_URL` can override the final GitHub Actions health-check URL when the public endpoint differs from `http://<DEPLOY_HOST>:8081/api/v1/health`.
 
 ## Server Requirements
@@ -60,7 +62,7 @@ The server process defaults to the relative path `configs/config.yaml`. That mea
 
 ## First-Time Setup
 
-1. Confirm the repository version of `clipSync-server/configs/config.yaml` is safe for the deployment environment.
+1. Confirm the repository version of `clipSync-server/configs/config.yaml` keeps the placeholder JWT secret and any other non-secret defaults you want deployed.
 2. Create the required GitHub repository secrets listed above.
 3. Install the deploy public key for `DEPLOY_USER` on the server.
 4. Capture the server host key for `DEPLOY_KNOWN_HOSTS`.
@@ -99,7 +101,7 @@ curl --fail http://127.0.0.1:8081/api/v1/health
 The remote deployment script is intentionally narrow and opinionated:
 
 - `data/` is preserved. The script creates `DEPLOY_PATH/data` if needed and never deletes or replaces it.
-- `configs/config.yaml` is overwritten from the repository on every deploy.
+- `configs/config.yaml` is overwritten from the repository on every deploy, then the script replaces the placeholder JWT secret with `DEPLOY_JWT_SECRET` on the server.
 - The live binary path is `DEPLOY_PATH/bin/clipsync-server-linux`.
 - The binary backup path is `DEPLOY_PATH/bin/clipsync-server-linux.prev`.
 - The config backup path is `DEPLOY_PATH/configs/config.yaml.prev`.
@@ -168,6 +170,7 @@ What to verify:
 
 - The service name in `DEPLOY_SERVICE_NAME` is correct.
 - The deployed config in `/opt/clipSync-server-src/configs/config.yaml` contains production-safe values.
+- `DEPLOY_JWT_SECRET` exists in GitHub Secrets and the deployed config no longer contains the placeholder value.
 - The service is actually starting the binary at `/opt/clipSync-server-src/bin/clipsync-server-linux`.
 - Port `8081` is listening and reachable from outside the host if the final GitHub Actions health check is using the default URL.
 - If `DEPLOY_PUBLIC_HEALTH_URL` is configured, verify that public endpoint and any proxy/load-balancer routing in front of it.
@@ -178,7 +181,7 @@ What to verify:
 Before treating this flow as ready:
 
 - Confirm the secrets in GitHub match the real server.
-- Confirm `clipSync-server/configs/config.yaml` is intended to overwrite production on every push to `main`.
+- Confirm `clipSync-server/configs/config.yaml` is intended to overwrite production on every push to `main`, aside from the JWT secret placeholder that gets replaced at deploy time.
 - Confirm `DEPLOY_PUBLIC_HEALTH_URL` is set if the API port is not publicly reachable from GitHub-hosted runners.
 - Confirm the systemd service still uses the same binary path and health endpoint.
 - Confirm operators understand that `data/` is preserved but config is not, and that rollback does not restore SQLite database state.

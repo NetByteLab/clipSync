@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -53,6 +54,10 @@ func Load(path string) (Config, error) {
 
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return cfg, fmt.Errorf("parse config file: %w", err)
+	}
+
+	if envSecret := strings.TrimSpace(os.Getenv("CLIPSYNC_JWT_SECRET")); envSecret != "" {
+		cfg.JWTSecret = envSecret
 	}
 
 	return cfg, nil
