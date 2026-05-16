@@ -7,7 +7,7 @@ Pushing to `main` triggers [.github/workflows/deploy-server.yml](/C:/Users/20562
 - Checks out the repo on `ubuntu-latest`
 - Sets up Go from `clipSync-server/go.mod`
 - Runs `go test ./... -v -count=1` in `clipSync-server`
-- Builds a Linux `amd64` server binary with `CGO_ENABLED=1`
+- Builds a Linux `amd64` server binary with `CGO_ENABLED=1` against musl so the release is compatible with older glibc-based servers such as Alibaba Cloud Linux 3
 - Packages the binary and `clipSync-server/configs/config.yaml` into `clipsync-server-release-<git-sha>.tar.gz`
 - Uploads the release archive to the deployment host over SSH/SCP
 - Pipes [`scripts/deploy/server-release.sh`](/C:/Users/20562/Desktop/桌面/clipSync/scripts/deploy/server-release.sh) to the remote host and executes it with deployment environment variables
@@ -28,6 +28,8 @@ Configure these repository secrets before enabling the workflow:
 | `DEPLOY_SERVICE_NAME` | `clipsync.service` | systemd service restarted during deploy and rollback |
 | `DEPLOY_KNOWN_HOSTS` | output of `ssh-keyscan -H 8.141.100.238` | Host key entry used for strict SSH host verification |
 | `DEPLOY_JWT_SECRET` | a long random secret | Injected into the deployed server config during deployment; do not store the live JWT secret in git |
+| `DEPLOY_BINARY_RELATIVE_PATH` | `clipsync-server` | Optional relative install path under `DEPLOY_PATH` for the live binary when the systemd service does not use `bin/clipsync-server-linux` |
+| `DEPLOY_CONFIG_RELATIVE_PATH` | `configs/config.yaml` | Optional relative install path under `DEPLOY_PATH` for the live config |
 
 Notes:
 
@@ -35,6 +37,7 @@ Notes:
 - `DEPLOY_KNOWN_HOSTS` is required because the workflow uses `StrictHostKeyChecking=yes`.
 - Keep `DEPLOY_PATH` and `DEPLOY_SERVICE_NAME` aligned with the actual server layout and systemd unit.
 - `DEPLOY_JWT_SECRET` should be treated as the real production JWT signing key. The repository config now keeps only the placeholder value.
+- Leave `DEPLOY_BINARY_RELATIVE_PATH` and `DEPLOY_CONFIG_RELATIVE_PATH` unset when the server uses the default layout under `DEPLOY_PATH/bin` and `DEPLOY_PATH/configs`.
 - Optional: `DEPLOY_PUBLIC_HEALTH_URL` can override the final GitHub Actions health-check URL when the public endpoint differs from `http://<DEPLOY_HOST>:8081/api/v1/health`.
 
 ## Server Requirements
@@ -44,10 +47,10 @@ The workflow assumes the target server already has:
 - A Linux environment reachable from GitHub-hosted runners over SSH
 - A systemd service matching `DEPLOY_SERVICE_NAME`
 - `bash`, `tar`, `curl`, and `systemctl` available on the target host
-- A writable deployment directory such as `/opt/clipSync-server-src`
+- A writable deployment directory such as `/opt/clipSync-server-src` or `/opt/clipsync`
 - Permission for `DEPLOY_USER` to write under `DEPLOY_PATH`
 - Permission for `DEPLOY_USER` to restart `DEPLOY_SERVICE_NAME`
-- The service configured to run the deployed binary from `DEPLOY_PATH/bin/clipsync-server-linux`
+- The service configured to run the deployed binary from either `DEPLOY_PATH/bin/clipsync-server-linux` or `DEPLOY_PATH/<DEPLOY_BINARY_RELATIVE_PATH>`
 - The service configured so the server can find `configs/config.yaml` after startup
 - The server health endpoint available at `http://127.0.0.1:8081/api/v1/health`
 
@@ -86,6 +89,12 @@ Example expectations:
 - Data directory: `/opt/clipSync-server-src/data`
 - Either `WorkingDirectory=/opt/clipSync-server-src` or `Environment=CLIPSYNC_CONFIG=/opt/clipSync-server-src/configs/config.yaml`
 
+If your existing service uses a flat layout like `/opt/clipsync/clipsync-server`, set:
+
+- `DEPLOY_PATH=/opt/clipsync`
+- `DEPLOY_BINARY_RELATIVE_PATH=clipsync-server`
+- `DEPLOY_CONFIG_RELATIVE_PATH=configs/config.yaml`
+
 7. Verify the service can start and answer its local health endpoint before relying on automation.
 
 ```bash
@@ -102,9 +111,9 @@ The remote deployment script is intentionally narrow and opinionated:
 
 - `data/` is preserved. The script creates `DEPLOY_PATH/data` if needed and never deletes or replaces it.
 - `configs/config.yaml` is overwritten from the repository on every deploy, then the script replaces the placeholder JWT secret with `DEPLOY_JWT_SECRET` on the server.
-- The live binary path is `DEPLOY_PATH/bin/clipsync-server-linux`.
-- The binary backup path is `DEPLOY_PATH/bin/clipsync-server-linux.prev`.
-- The config backup path is `DEPLOY_PATH/configs/config.yaml.prev`.
+- The live binary path defaults to `DEPLOY_PATH/bin/clipsync-server-linux`, but can be overridden with `DEPLOY_BINARY_RELATIVE_PATH`.
+- The binary backup path is the live binary path with `.prev` appended.
+- The config backup path is the live config path with `.prev` appended.
 - The uploaded release archive is stored remotely at `/tmp/clipsync-server-release-<git-sha>.tar.gz`.
 - The script extracts into a temporary staging directory under `/tmp/clipsync-release.XXXXXX`.
 - Archive contents are validated before extraction to reject absolute paths, path traversal, and unsupported entry types.
@@ -172,6 +181,7 @@ What to verify:
 - The deployed config in `/opt/clipSync-server-src/configs/config.yaml` contains production-safe values.
 - `DEPLOY_JWT_SECRET` exists in GitHub Secrets and the deployed config no longer contains the placeholder value.
 - The service is actually starting the binary at `/opt/clipSync-server-src/bin/clipsync-server-linux`.
+- If `DEPLOY_BINARY_RELATIVE_PATH` is set, verify the service path matches that effective install path instead of the default `bin/clipsync-server-linux`.
 - Port `8081` is listening and reachable from outside the host if the final GitHub Actions health check is using the default URL.
 - If `DEPLOY_PUBLIC_HEALTH_URL` is configured, verify that public endpoint and any proxy/load-balancer routing in front of it.
 - If rollback ran, check whether `.prev` files were restored and whether the service recovered to the previous version.

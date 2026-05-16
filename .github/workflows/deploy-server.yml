@@ -30,6 +30,11 @@ jobs:
         with:
           go-version-file: clipSync-server/go.mod
 
+      - name: Install musl toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+
       - name: Run server tests
         working-directory: clipSync-server
         run: go test ./... -v -count=1
@@ -40,7 +45,12 @@ jobs:
           GOOS: linux
           GOARCH: amd64
           CGO_ENABLED: "1"
-        run: go build -o bin/clipsync-server-linux ./cmd/server
+          CC: x86_64-linux-musl-gcc
+        run: |
+          go build \
+            -ldflags='-linkmode external -extldflags "-static"' \
+            -o bin/clipsync-server-linux \
+            ./cmd/server
 
       - name: Assemble release bundle
         env:
@@ -87,6 +97,8 @@ jobs:
           DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
           DEPLOY_SERVICE_NAME: ${{ secrets.DEPLOY_SERVICE_NAME }}
           DEPLOY_JWT_SECRET: ${{ secrets.DEPLOY_JWT_SECRET }}
+          DEPLOY_BINARY_RELATIVE_PATH: ${{ secrets.DEPLOY_BINARY_RELATIVE_PATH }}
+          DEPLOY_CONFIG_RELATIVE_PATH: ${{ secrets.DEPLOY_CONFIG_RELATIVE_PATH }}
         run: |
           ssh_opts=(
             -o BatchMode=yes
@@ -101,6 +113,8 @@ jobs:
             printf 'export DEPLOY_PATH=%q\n' "$DEPLOY_PATH"
             printf 'export DEPLOY_SERVICE_NAME=%q\n' "$DEPLOY_SERVICE_NAME"
             printf 'export DEPLOY_JWT_SECRET=%q\n' "$DEPLOY_JWT_SECRET"
+            printf 'export DEPLOY_BINARY_RELATIVE_PATH=%q\n' "$DEPLOY_BINARY_RELATIVE_PATH"
+            printf 'export DEPLOY_CONFIG_RELATIVE_PATH=%q\n' "$DEPLOY_CONFIG_RELATIVE_PATH"
             cat scripts/deploy/server-release.sh
           } | ssh "${ssh_opts[@]}" "${DEPLOY_USER}@${DEPLOY_HOST}" "bash -s"
 

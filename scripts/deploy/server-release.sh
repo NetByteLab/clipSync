@@ -140,12 +140,38 @@ require_env DEPLOY_PATH
 require_env DEPLOY_SERVICE_NAME
 require_env DEPLOY_JWT_SECRET
 
+DEPLOY_BINARY_RELATIVE_PATH="${DEPLOY_BINARY_RELATIVE_PATH:-bin/clipsync-server-linux}"
+DEPLOY_CONFIG_RELATIVE_PATH="${DEPLOY_CONFIG_RELATIVE_PATH:-configs/config.yaml}"
+
 DEPLOY_HEALTH_URL="${DEPLOY_HEALTH_URL:-http://127.0.0.1:8081/api/v1/health}"
+
+validate_relative_path() {
+  local path_value="$1"
+  local label="$2"
+
+  if [[ -z "$path_value" ]]; then
+    echo "Missing relative path for $label" >&2
+    exit 1
+  fi
+
+  if [[ "$path_value" = /* ]]; then
+    echo "$label must be relative, got absolute path: $path_value" >&2
+    exit 1
+  fi
+
+  if [[ "$path_value" == ".." || "$path_value" == ../* || "$path_value" == */../* || "$path_value" == */.. ]]; then
+    echo "$label contains path traversal: $path_value" >&2
+    exit 1
+  fi
+}
 
 if [[ ! -f "$DEPLOY_ARCHIVE" ]]; then
   echo "Deploy archive not found: $DEPLOY_ARCHIVE" >&2
   exit 1
 fi
+
+validate_relative_path "$DEPLOY_BINARY_RELATIVE_PATH" "DEPLOY_BINARY_RELATIVE_PATH"
+validate_relative_path "$DEPLOY_CONFIG_RELATIVE_PATH" "DEPLOY_CONFIG_RELATIVE_PATH"
 
 validate_archive_paths
 
@@ -157,11 +183,11 @@ tar -xzf "$DEPLOY_ARCHIVE" -C "$STAGING_DIR"
 RELEASE_ROOT="$(resolve_release_root)"
 NEW_BINARY="$RELEASE_ROOT/bin/clipsync-server-linux"
 NEW_CONFIG="$RELEASE_ROOT/configs/config.yaml"
-LIVE_BINARY="$DEPLOY_PATH/bin/clipsync-server-linux"
-BACKUP_BINARY="$DEPLOY_PATH/bin/clipsync-server-linux.prev"
-TEMP_BINARY="$DEPLOY_PATH/bin/clipsync-server-linux.new"
-LIVE_CONFIG="$DEPLOY_PATH/configs/config.yaml"
-BACKUP_CONFIG="$DEPLOY_PATH/configs/config.yaml.prev"
+LIVE_BINARY="$DEPLOY_PATH/$DEPLOY_BINARY_RELATIVE_PATH"
+BACKUP_BINARY="$LIVE_BINARY.prev"
+TEMP_BINARY="$LIVE_BINARY.new"
+LIVE_CONFIG="$DEPLOY_PATH/$DEPLOY_CONFIG_RELATIVE_PATH"
+BACKUP_CONFIG="$LIVE_CONFIG.prev"
 
 if [[ ! -f "$NEW_BINARY" || -L "$NEW_BINARY" ]]; then
   echo "Release binary missing from archive: $NEW_BINARY" >&2
@@ -173,7 +199,7 @@ if [[ ! -f "$NEW_CONFIG" || -L "$NEW_CONFIG" ]]; then
   exit 1
 fi
 
-install -d "$DEPLOY_PATH/bin" "$DEPLOY_PATH/configs" "$DEPLOY_PATH/data"
+install -d "$(dirname "$LIVE_BINARY")" "$(dirname "$LIVE_CONFIG")" "$DEPLOY_PATH/data"
 
 if [[ -f "$LIVE_BINARY" ]]; then
   HAD_LIVE_BINARY=1
